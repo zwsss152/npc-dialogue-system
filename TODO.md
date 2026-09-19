@@ -18,6 +18,47 @@ This file tracks the development status and completed features.
 - ✅ v1.7.0 - Multiplayer NPC Synchronization (Phase 5c)
 - ✅ v1.8.0 - NPC-to-NPC Conversations (Phase 5d)
 - ✅ v1.9.0 - Dungeon Master AI — Event-Driven Narrative Overseer (Phase 5e)
+- ✅ v1.10.0 - Eavesdrop System (this fork)          
+- ❌ v2.0.0 - Player simulation + novel chronicle — REMOVED in this fork
+
+### Phase 5f: Eavesdrop System ✅ (this fork)
+
+**Status:** COMPLETED
+
+**Implementation:**
+- `eavesdrop.py` — the mechanic itself
+  - `EavesdropSpot` data model: position, hear radius, notice radius, NPC anchor, fixed topic, intel payload
+  - `PlayerPresence`: position + posture + cover, reported by the client
+  - Detection scaled by posture (run 2.5x, crouch 0.5x, cover 0.4x further)
+  - `check()` returns a machine code *and* a player-facing sentence for every failure
+  - Intel ledger, prompt-ready brief, and transcript prefetch/caching
+- `eavesdrop_spots.json` — four authored spots forming a three-stage mystery
+- `npc_conversation.py` — three hooks added
+  - `ConversationTrigger.EAVESDROP`
+  - `topic_id` forced through `start_conversation` / `run_full_conversation`
+  - `ambient_filter` callback so random chatter yields the pair a player is waiting on
+- `api_server.py` — 9 endpoints under `/api/eavesdrop/` plus the `/eavesdrop` map page
+- `static/eavesdrop.html` — playable 2D map: move, choose posture, take cover, listen
+- `demo_eavesdrop.py`, `test_eavesdrop.py` (29 tests), `EAVESDROP.md`
+
+**Bugs fixed along the way:**
+- `run_full_conversation()` never executed a single turn — the loop waited on `ACTIVE` while a
+  fresh conversation starts in `STARTING`. NPC-to-NPC conversations had never actually run.
+- A missing Ollama backend raised `ConnectionError` on construction, making the whole codebase
+  impossible to test without a running model. Now warns, with `NPC_STRICT_BACKEND=1` to opt back in.
+- Ollama probe now has a 30s cooldown so building N NPCs does not cost N × 5s of timeouts.
+- Offline template responses were subject-blind filler; they are now topic-aware and de-duplicated.
+
+**API Endpoints:**
+- GET  /eavesdrop
+- GET  /api/eavesdrop/map
+- POST /api/eavesdrop/presence
+- GET  /api/eavesdrop/check/{spot_id}
+- POST /api/eavesdrop/listen
+- GET  /api/eavesdrop/session/{player_id}
+- GET  /api/eavesdrop/status/{player_id}
+- GET  /api/eavesdrop/intel/{player_id}
+- POST /api/eavesdrop/prefetch
 
 ### Phase 5e: Dungeon Master AI ✅
 
@@ -277,6 +318,8 @@ npc-dialogue-system/
 ├── npc_state_manager.py        # Multiplayer state management
 ├── event_system.py             # Real-time event broadcasting
 ├── npc_conversation.py         # NPC-to-NPC conversations
+├── eavesdrop.py                # Eavesdrop spots, detection, intel (this fork)
+├── eavesdrop_spots.json        # Eavesdrop content (this fork)
 ├── api_server.py               # REST API + WebSocket server
 │
 ├── main.py                     # CLI demo
@@ -287,6 +330,8 @@ npc-dialogue-system/
 ├── demo_voice.py               # Voice system demo
 ├── demo_multiplayer.py         # Multiplayer demo
 ├── demo_npc_conversation.py    # NPC conversation demo
+├── demo_eavesdrop.py           # Eavesdrop demo (this fork)
+├── test_eavesdrop.py           # 29 eavesdrop tests (this fork)
 │
 ├── character_cards/            # NPC definitions
 │   ├── blacksmith.json
@@ -310,6 +355,9 @@ npc-dialogue-system/
 │   └── Editor/
 │       └── NPCDialogueWindow.cs
 │
+├── static/
+│   └── eavesdrop.html          # Playable eavesdrop map (this fork)
+│
 ├── docs/                       # Documentation
 │   ├── QUEST_GENERATION_DESIGN.md
 │   └── VOICE_SYNTHESIS.md
@@ -325,6 +373,7 @@ npc-dialogue-system/
 
 | Version | Date | Features |
 |---------|------|----------|
+| v1.10.0 | 2026-09-19 | Eavesdrop system + 4 bug fixes (fork) |
 | v1.8.0 | 2026-04-14 | NPC-to-NPC conversations |
 | v1.7.0 | 2026-04-13 | Multiplayer NPC synchronization |
 | v1.6.0 | 2026-04-13 | Voice synthesis system |
@@ -389,6 +438,9 @@ python demo_voice.py
 
 # Run multiplayer demo
 python demo_multiplayer.py
+
+# Run eavesdrop demo
+python demo_eavesdrop.py
 
 # Run NPC conversation demo
 python demo_npc_conversation.py

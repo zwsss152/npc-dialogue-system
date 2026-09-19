@@ -23,7 +23,6 @@ saves/*.json
 voice_cache/*.json
 voice_output/*.json
 lore_database/*.json
-chronicle_data/*.json
 
 # Runtime state directories
 cache/

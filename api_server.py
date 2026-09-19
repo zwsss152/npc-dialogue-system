@@ -31,10 +31,12 @@ from performance import (
     PerformanceManager, ResponseCache, OllamaConnectionPool,
     BatchProcessor, PerformanceMetrics
 )
-from player_simulation import SimulationEngine, ChronicleStore, SimulationState
 from dungeon_master import DungeonMaster, DungeonMasterConfig
 from dm_rule_engine import DmRuleEngine
 from llm_providers import create_provider
+from eavesdrop import EavesdropManager, Posture
+
+EAVESDROP_SPOTS_FILE = Path("eavesdrop_spots.json")
 
 # Initialize FastAPI app
 app = FastAPI(
@@ -63,8 +65,7 @@ conversation_manager: Optional[ConversationManager] = None
 performance_manager: Optional[PerformanceManager] = None
 dungeon_master: Optional[DungeonMaster] = None
 dm_rule_engine: Optional[DmRuleEngine] = None
-simulation_engine: Optional[SimulationEngine] = None
-chronicle_store: Optional[ChronicleStore] = None
+eavesdrop_manager: Optional[EavesdropManager] = None
 CHARACTER_CARDS_DIR = Path("character_cards")
 
 
@@ -145,7 +146,7 @@ class StatusResponse(BaseModel):
 @app.on_event("startup")
 async def startup_event():
     """Initialize the NPC system on server start."""
-    global manager, relationship_tracker, quest_manager, quest_extractor, voice_system, event_system, performance_manager, dungeon_master, dm_rule_engine, simulation_engine, chronicle_store, conversation_manager
+    global manager, relationship_tracker, quest_manager, quest_extractor, voice_system, event_system, performance_manager, dungeon_master, dm_rule_engine, conversation_manager, eavesdrop_manager
     
     # Initialize performance manager FIRST (for connection pooling)
     performance_manager = PerformanceManager(
@@ -220,6 +221,14 @@ async def startup_event():
     )
     print("✅ Conversation manager initialized")
 
+    # Initialize eavesdrop manager (see eavesdrop.py)
+    eavesdrop_manager = EavesdropManager(conversation_manager)
+    if EAVESDROP_SPOTS_FILE.exists():
+        loaded = eavesdrop_manager.load_spots(EAVESDROP_SPOTS_FILE)
+        print(f"✅ Eavesdrop manager initialized ({loaded} spots)")
+    else:
+        print("⚠️  eavesdrop_spots.json not found — no eavesdrop spots registered")
+
     # Initialize Dungeon Master
     dm_config = DungeonMasterConfig.from_env()
     if dm_config.enabled:
@@ -255,20 +264,6 @@ async def startup_event():
     else:
         print("ℹ️  Dungeon Master disabled (DM_ENABLED=false)")
     
-    # Initialize simulation engine
-    chronicle_store = ChronicleStore(data_dir="chronicle_data")
-    simulation_engine = SimulationEngine(
-        chronicle_store=chronicle_store,
-        npc_manager=manager,
-        relationship_tracker=relationship_tracker,
-        quest_manager=quest_manager,
-        conversation_manager=conversation_manager,
-        lore_system=manager.lore_system if manager else None,
-        event_system=event_system,
-        dm_engine=dungeon_master,
-    )
-    print("✅ Simulation engine initialized")
-    
     # Check backend connection
     if manager._provider.check_connection():
         print(f"✅ Connected to {backend} backend")
@@ -282,7 +277,7 @@ async def startup_event():
 @app.on_event("shutdown")
 async def shutdown_event():
     """Save data on server shutdown."""
-    global relationship_tracker, event_system, performance_manager, dungeon_master, dm_rule_engine, chronicle_store, simulation_engine
+    global relationship_tracker, event_system, performance_manager, dungeon_master, dm_rule_engine
     
     if relationship_tracker:
         relationship_tracker.save()
@@ -301,14 +296,6 @@ async def shutdown_event():
         await event_system.stop()
         print("💾 Saved state and stopped event system")
     
-    if chronicle_store:
-        chronicle_store.save()
-        print("💾 Saved chronicle data")
-    
-    if simulation_engine and simulation_engine.state.value == "running":
-        simulation_engine.cancel()
-        print("⏹  Cancelled running simulation")
-
 
 # Health Check
 @app.get("/api/status", response_model=StatusResponse)
@@ -2479,121 +2466,119 @@ async def reset_dm_state():
     return {"reset": True}
 
 
-# ─── Chronicle & Simulation Endpoints ────────────────────────────────────
-
-@app.get("/chronicle")
-async def serve_chronicle():
-    """Serve the live chronicle webpage."""
-    return FileResponse("static/chronicle.html")
 
 
-@app.websocket("/ws/chronicle")
-async def chronicle_websocket(websocket: WebSocket):
-    """WebSocket endpoint for live chronicle updates."""
-    await websocket.accept()
-    
-    if not simulation_engine:
-        await websocket.send_json({"type": "error", "message": "Simulation engine not initialized"})
-        await websocket.close()
-        return
-    
-    simulation_engine.register_websocket(websocket)
-    
+# ─── Eavesdrop Endpoints ─────────────────────────────────────────────────
+
+
+class PresenceRequest(BaseModel):
+    player_id: str = "player"
+    position: List[float]
+    posture: str = "stand"
+    concealed: bool = False
+    location: str = ""
+
+
+class ListenRequest(BaseModel):
+    player_id: str = "player"
+    spot_id: str
+    force_live: bool = False
+
+
+def _require_eavesdrop() -> EavesdropManager:
+    if not eavesdrop_manager:
+        raise HTTPException(status_code=503, detail="Eavesdrop manager not initialized")
+    return eavesdrop_manager
+
+
+@app.get("/eavesdrop")
+async def serve_eavesdrop_ui():
+    """地图界面：走动、看偷听点、按下偷听。"""
+    page = Path("static/eavesdrop.html")
+    if not page.exists():
+        raise HTTPException(status_code=404, detail="static/eavesdrop.html not found")
+    return FileResponse(page)
+
+
+@app.get("/api/eavesdrop/map")
+async def get_eavesdrop_map(player_id: str = "player"):
+    """全部偷听点 + NPC 位置 + 玩家当前能不能听。答案（intel）不会出现在这里。"""
+    mgr = _require_eavesdrop()
+    return {
+        "player_id": player_id,
+        "spots": mgr.list_spots(player_id),
+        "npc_positions": [
+            {"name": n, "position": list(p)} for n, p in mgr.npc_positions.items()
+        ],
+        "postures": list(Posture.ALL),
+    }
+
+
+@app.post("/api/eavesdrop/presence")
+async def set_eavesdrop_presence(req: PresenceRequest):
+    """前端持续上报玩家位置与姿态。偷听判定完全建立在这个状态上。"""
+    mgr = _require_eavesdrop()
+    presence = mgr.set_presence(
+        player_id=req.player_id,
+        position=(req.position[0], req.position[1]),
+        posture=req.posture,
+        concealed=req.concealed,
+        location=req.location,
+    )
+    return {"presence": presence.__dict__}
+
+
+@app.get("/api/eavesdrop/check/{spot_id}")
+async def check_eavesdrop_spot(spot_id: str, player_id: str = "player"):
+    """问"我现在能听吗"，无论能不能都会给出人类可读的原因。"""
+    mgr = _require_eavesdrop()
+    return mgr.check(spot_id, player_id).to_dict()
+
+
+@app.post("/api/eavesdrop/listen")
+async def eavesdrop_listen(req: ListenRequest):
+    """按下偷听按钮。成功返回完整对白 + 情报，失败返回原因而不是报错。"""
+    mgr = _require_eavesdrop()
     try:
-        while True:
-            data = await websocket.receive_text()
-            try:
-                msg = json.loads(data)
-                if msg.get("action") == "ping":
-                    await websocket.send_json({"type": "pong"})
-            except json.JSONDecodeError:
-                pass
-    except WebSocketDisconnect:
-        simulation_engine.unregister_websocket(websocket)
-    except Exception:
-        simulation_engine.unregister_websocket(websocket)
+        return await mgr.eavesdrop(req.spot_id, req.player_id, force_live=req.force_live)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
 
-@app.get("/api/chronicle/state")
-async def get_chronicle_state():
-    """Get full chronicle state (all turns, metadata)."""
-    if not chronicle_store:
-        raise HTTPException(status_code=503, detail="Chronicle store not initialized")
-    return chronicle_store.get_full_state()
+@app.get("/api/eavesdrop/session/{player_id}")
+async def get_eavesdrop_session(player_id: str):
+    """最近一次偷听到的对白，用于回看。"""
+    mgr = _require_eavesdrop()
+    return mgr.last_session.get(player_id) or {"ok": False, "reason": "还没有偷听过"}
 
 
-@app.get("/api/chronicle/turns")
-async def get_chronicle_turns():
-    """Get list of all turn summaries."""
-    if not chronicle_store:
-        raise HTTPException(status_code=503, detail="Chronicle store not initialized")
-    return {"turns": chronicle_store.get_turn_summaries()}
+@app.get("/api/eavesdrop/status/{player_id}")
+async def get_eavesdrop_status(player_id: str):
+    mgr = _require_eavesdrop()
+    return mgr.status(player_id)
 
 
-@app.get("/api/chronicle/turn/{turn_id}")
-async def get_chronicle_turn(turn_id: str):
-    """Get full detail for a single turn."""
-    if not chronicle_store:
-        raise HTTPException(status_code=503, detail="Chronicle store not initialized")
-    turn = chronicle_store.get_turn(turn_id)
-    if not turn:
-        raise HTTPException(status_code=404, detail=f"Turn '{turn_id}' not found")
-    return turn.to_dict()
+@app.get("/api/eavesdrop/intel/{player_id}")
+async def get_eavesdrop_intel(player_id: str):
+    """玩家已获得的情报。可整段注入 NPC 的 system prompt。"""
+    mgr = _require_eavesdrop()
+    return {
+        "intel": mgr.get_intel(player_id),
+        "prompt_brief": mgr.intel_brief(player_id),
+    }
 
 
-@app.post("/api/simulation/start")
-async def start_simulation(background_tasks: BackgroundTasks):
-    """Start the player simulation."""
-    global simulation_engine
-    
-    if not simulation_engine:
-        raise HTTPException(status_code=503, detail="Simulation engine not initialized")
-    
-    if simulation_engine.state.value == "running":
-        return {"status": "already_running", "info": simulation_engine.get_status()}
-    
-    if simulation_engine.state.value == "complete":
-        simulation_engine.reset()
-    
-    background_tasks.add_task(_run_simulation_background)
-    
-    return {"status": "running"}
+@app.post("/api/eavesdrop/prefetch")
+async def prefetch_eavesdrop(player_id: str = "player"):
+    """把所有偷听点的对白提前生成好。
 
+    本地模型跑一段对谈要十几秒。等玩家按下按钮才开始生成，体验会直接崩掉。
+    推荐在关卡加载时调一次，之后偷听是瞬时的。
+    """
+    mgr = _require_eavesdrop()
+    count = await mgr.prefetch_all()
+    return {"prefetched": count, "total": len(mgr.spots)}
 
-async def _run_simulation_background():
-    """Run the simulation as a background task."""
-    try:
-        await simulation_engine.run_simulation(start_session=1, end_session=5)
-    except Exception as e:
-        print(f"Simulation error: {e}")
-        import traceback
-        traceback.print_exc()
-
-
-@app.post("/api/simulation/pause")
-async def pause_simulation():
-    """Pause the running simulation."""
-    if not simulation_engine:
-        raise HTTPException(status_code=503, detail="Simulation engine not initialized")
-    simulation_engine.pause()
-    return {"status": "paused"}
-
-
-@app.post("/api/simulation/resume")
-async def resume_simulation():
-    """Resume a paused simulation."""
-    if not simulation_engine:
-        raise HTTPException(status_code=503, detail="Simulation engine not initialized")
-    simulation_engine.resume()
-    return {"status": "running"}
-
-
-@app.get("/api/simulation/status")
-async def get_simulation_status():
-    """Get current simulation status."""
-    if not simulation_engine:
-        return {"state": "not_initialized"}
-    return simulation_engine.get_status()
 
 
 # Run server

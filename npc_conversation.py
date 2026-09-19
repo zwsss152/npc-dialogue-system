@@ -15,6 +15,7 @@ import json
 import time
 import random
 import asyncio
+import itertools
 from typing import List, Dict, Optional, Callable, Any, Tuple
 from dataclasses import dataclass, field
 from enum import Enum
@@ -32,6 +33,7 @@ class ConversationTrigger(Enum):
     EVENT = "event"               # World event triggered
     PLAYER_NEARBY = "player_nearby"  # Player entered area
     RANDOM = "random"             # Random ambient chatter
+    EAVESDROP = "eavesdrop"       # Player deliberately listened in (see eavesdrop.py)
     FORCED = "forced"             # Scripted/forced conversation
 
 
@@ -453,7 +455,7 @@ IMPORTANT:
         
         if not self.ollama_available:
             # Fallback to simple templates if Ollama not available
-            return self._template_response(speaker_name, listener_name, topic, is_start, is_end)
+            return self._template_response(speaker_name, listener_name, topic, is_start, is_end, history=conversation_history)
         
         system_prompt = self._build_conversation_prompt(
             speaker_name, listener_name, topic, conversation_history, is_start, is_end, context
@@ -492,7 +494,7 @@ IMPORTANT:
             return result['message']['content'].strip()
         except Exception as e:
             print(f"Error generating NPC response: {e}")
-            return self._template_response(speaker_name, listener_name, topic, is_start, is_end)
+            return self._template_response(speaker_name, listener_name, topic, is_start, is_end, history=conversation_history)
     
     def _template_response(
         self,
@@ -500,37 +502,58 @@ IMPORTANT:
         listener_name: str,
         topic: Optional[ConversationTopic],
         is_start: bool,
-        is_end: bool
+        is_end: bool,
+        history: Optional[List[ConversationExchange]] = None
     ) -> str:
-        """Fallback template responses when LLM unavailable."""
-        
+        """Fallback template responses when the LLM is unavailable.
+
+        Deliberately **topic-aware**. A filler line that ignores the subject
+        entirely ("Hmm, interesting point.") makes an offline run look broken
+        rather than degraded — and this fallback is what every user without a
+        model running will actually see.
+
+        Lines already spoken in this conversation are filtered out, so a short
+        exchange does not repeat itself.
+        """
+        spoken = {e.message for e in (history or [])}
+
+        def pick(candidates: List[str]) -> str:
+            fresh = [c for c in candidates if c not in spoken]
+            return random.choice(fresh or candidates)
+
         if is_start:
-            greetings = [
-                f"Hey there, {listener_name}!",
+            return pick([
+                f"Hey there, {listener_name}.",
                 f"Good to see you, {listener_name}.",
-                f"Oh, {listener_name}! Just who I was hoping to run into.",
-                f"{listener_name}! A word, if you have a moment.",
-            ]
-            return random.choice(greetings)
-        
+                f"Oh, {listener_name}. Just who I was hoping to run into.",
+                f"{listener_name}. A word, if you have a moment.",
+            ])
+
         if is_end:
-            farewells = [
-                "Well, I should get going. Take care!",
-                "I'd best be off. Until next time!",
+            return pick([
+                "Well, I should get going. Take care.",
+                "I'd best be off. Until next time.",
                 "Got to run. We'll catch up later.",
-                "Duty calls. Good talking with you!",
-            ]
-            return random.choice(farewells)
-        
-        # General responses
-        responses = [
-            "Hmm, interesting point.",
-            "I hadn't thought of it that way.",
-            "You make a fair argument.",
-            "That's certainly one way to look at it.",
-            "I suppose you're right about that.",
-        ]
-        return random.choice(responses)
+                "Enough for now. Don't repeat any of this.",
+            ])
+
+        subject = (topic.name if topic else "").lower()
+        if subject:
+            return pick([
+                f"It comes back to {subject}, doesn't it.",
+                f"I keep telling you — {subject} is not a small matter.",
+                f"Say what you like. {subject.capitalize()} still doesn't add up.",
+                f"We agree on {subject}, then. The rest we can argue about later.",
+                f"You are asking me about {subject}, and I am telling you to leave it alone.",
+                f"Nobody else is going to say it out loud, so I will: {subject}.",
+            ])
+
+        return pick([
+            "Go on, then. I'm listening.",
+            "That is not what you said last time.",
+            "Keep your voice down and say that again.",
+            "I don't like it either, but there it is.",
+        ])
 
 
 class ConversationManager:
@@ -553,11 +576,19 @@ class ConversationManager:
         relationship_tracker: Optional[RelationshipTracker] = None,
         lore_system: Optional[Any] = None,
         max_history_size: int = 500,
+        ambient_chance: float = 0.1,
     ):
         self.npc_manager = npc_manager
         self.relationship_tracker = relationship_tracker
         self.lore_system = lore_system
         self.max_history_size = max_history_size
+
+        #: 每次 proximity 检查时，两个 NPC 自行开聊的概率
+        self.ambient_chance = ambient_chance
+
+        #: 可选回调 (npc1, npc2) -> bool。返回 True 表示这一对**不要**开聊。
+        #: 偷听系统用它来避让玩家正站在偷听点上的场景，见 eavesdrop.py。
+        self.ambient_filter: Optional[Callable[[str, str], bool]] = None
         
         # Create engine if not provided
         self.engine = conversation_engine or NPCConversationEngine(
@@ -597,9 +628,15 @@ class ConversationManager:
         trigger: ConversationTrigger = ConversationTrigger.FORCED,
         location: Optional[str] = None,
         max_turns: int = 6,
-        context: Optional[Dict] = None
+        context: Optional[Dict] = None,
+        topic_id: Optional[str] = None
     ) -> NPCConversation:
-        """Start a new conversation between two NPCs."""
+        """Start a new conversation between two NPCs.
+
+        Args:
+            topic_id: 指定话题。传了就**不会**再随机抽取 —— 偷听点依赖这个，
+                      因为随机话题会让玩家听到的多半是"今天天气不错"这类废话。
+        """
         
         # Check if either NPC is already in conversation
         if self.is_npc_in_conversation(npc1_name):
@@ -624,7 +661,13 @@ class ConversationManager:
             location=location or self.npc_locations.get(npc1_name),
             metadata=context or {}
         )
-        
+
+        # 指定话题：直接写进 current_topic，run_conversation_turn 就不会再去抽
+        if topic_id:
+            conversation.current_topic = topic_id
+            if topic_id not in conversation.topics_discussed:
+                conversation.topics_discussed.append(topic_id)
+
         self.active_conversations[conversation.conversation_id] = conversation
         
         # Trigger callback
@@ -807,9 +850,14 @@ class ConversationManager:
         max_turns: int = 6,
         turn_delay: float = 2.0,
         location: Optional[str] = None,
-        context: Optional[Dict] = None
+        context: Optional[Dict] = None,
+        topic_id: Optional[str] = None
     ) -> NPCConversation:
-        """Run a complete conversation from start to finish."""
+        """Run a complete conversation from start to finish.
+        
+        Args:
+            topic_id: 指定话题，透传给 start_conversation（偷听点用）
+        """
         
         conversation = self.start_conversation(
             npc1_name=npc1_name,
@@ -817,14 +865,26 @@ class ConversationManager:
             trigger=trigger,
             location=location,
             max_turns=max_turns,
-            context=context
+            context=context,
+            topic_id=topic_id
         )
         
         conversation.turn_delay = turn_delay
         
-        # Run all turns
-        while conversation.state == ConversationState.ACTIVE:
+        # Run all turns.
+        #
+        # NOTE: the loop must accept STARTING as well as ACTIVE. A freshly
+        # started conversation is in STARTING; it only flips to ACTIVE inside
+        # its first `run_conversation_turn`. Waiting for ACTIVE here meant the
+        # loop body never executed and every conversation came back empty.
+        guard = conversation.max_turns + 2
+        while conversation.state in (ConversationState.STARTING, ConversationState.ACTIVE):
             await self.run_conversation_turn(conversation.conversation_id)
+            guard -= 1
+            if guard <= 0:
+                # 兜底：万一某个 turn 没能把状态推到 COMPLETED，也不能死循环
+                self.end_conversation(conversation.conversation_id, natural=False)
+                break
             if conversation.state == ConversationState.ACTIVE:
                 await asyncio.sleep(turn_delay)
         
@@ -843,7 +903,14 @@ class ConversationManager:
         return [name for name, loc in self.npc_locations.items() if loc == location]
     
     async def check_proximity_conversations(self, location: Optional[str] = None):
-        """Check for proximity-triggered conversations."""
+        """Check for proximity-triggered conversations.
+
+        这是"世界自己在运转"的那一半：玩家不介入时，同一区域的 NPC 有几率
+        自己聊起来。概率由 `ambient_chance` 控制（默认每次检查 10%）。
+
+        `ambient_filter` 回调用来避让玩家正在偷听的 NPC 对 —— 否则玩家走到
+        偷听点上，这两个人可能已经自己聊上了，按钮会直接失效。
+        """
         
         # Group NPCs by location
         locations_to_check = [location] if location else set(self.npc_locations.values())
@@ -854,20 +921,30 @@ class ConversationManager:
             # Need at least 2 NPCs who aren't already conversing
             available = [n for n in npcs_here if not self.is_npc_in_conversation(n)]
             
-            if len(available) >= 2:
-                # Random chance to start conversation
-                if random.random() < 0.1:  # 10% chance per check
-                    # Pick two random NPCs
-                    pair = random.sample(available, 2)
-                    try:
-                        await self.run_full_conversation(
-                            npc1_name=pair[0],
-                            npc2_name=pair[1],
-                            trigger=ConversationTrigger.PROXIMITY,
-                            location=loc
-                        )
-                    except Exception as e:
-                        print(f"Error starting proximity conversation: {e}")
+            if len(available) < 2:
+                continue
+            
+            # Random chance to start conversation
+            if random.random() >= self.ambient_chance:
+                continue
+            
+            # 候选组合里剔掉被偷听系统"占用"的配对
+            pairs = list(itertools.combinations(available, 2))
+            if self.ambient_filter:
+                pairs = [p for p in pairs if not self.ambient_filter(p[0], p[1])]
+            if not pairs:
+                continue
+            
+            pair = random.choice(pairs)
+            try:
+                await self.run_full_conversation(
+                    npc1_name=pair[0],
+                    npc2_name=pair[1],
+                    trigger=ConversationTrigger.PROXIMITY,
+                    location=loc
+                )
+            except Exception as e:
+                print(f"Error starting proximity conversation: {e}")
     
     # ============================================
     # PLAYER OVERHEARING

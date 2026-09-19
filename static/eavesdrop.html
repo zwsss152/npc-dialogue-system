@@ -1,0 +1,374 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Eavesdrop — Ironhold Village</title>
+<style>
+  :root{
+    --bg:#f6f5f2; --panel:#fff; --ink:#221f1b; --dim:#77726a; --faint:#a8a29a;
+    --line:#e4e1da; --accent:#3b5c88; --ok:#3f7a52; --warn:#b0713a; --bad:#a94442;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+       font:14px/1.7 -apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}
+  header{padding:14px 22px;background:var(--panel);border-bottom:1px solid var(--line);
+         display:flex;align-items:baseline;gap:14px;flex-wrap:wrap}
+  header h1{margin:0;font-size:16px;font-weight:600}
+  header .sub{color:var(--dim);font-size:12.5px}
+  header .spacer{flex:1}
+  button{font:inherit;padding:9px 16px;border:1px solid var(--accent);background:var(--accent);
+         color:#fff;border-radius:7px;cursor:pointer}
+  button.ghost{background:var(--panel);color:var(--accent)}
+  button:disabled{opacity:.45;cursor:default}
+  .wrap{display:grid;grid-template-columns:minmax(0,1fr) 320px;gap:14px;padding:14px;max-width:1400px;margin:0 auto}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px 16px}
+  .card h2{margin:0 0 10px;font-size:11.5px;letter-spacing:.9px;color:var(--faint);font-weight:600}
+  #map{width:100%;height:auto;display:block;background:#fbfaf7;border-radius:8px;cursor:crosshair}
+  .row{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px}
+  .seg{border:1px solid var(--line);border-radius:7px;padding:7px 12px;cursor:pointer;font-size:13px;background:var(--panel)}
+  .seg.on{border-color:var(--accent);background:#eef2f8;color:var(--accent);font-weight:600}
+  .kv{display:flex;justify-content:space-between;font-size:13px;padding:4px 0;border-bottom:1px dashed var(--line)}
+  .kv:last-child{border:0}
+  .reason{font-size:13px;padding:10px 12px;border-radius:7px;line-height:1.6;margin:10px 0}
+  .reason.ok{background:#eef5ef;color:var(--ok)}
+  .reason.no{background:#f8f1ee;color:var(--warn)}
+  .spotitem{padding:8px 10px;border:1px solid var(--line);border-radius:7px;margin-bottom:7px;cursor:pointer;font-size:13px}
+  .spotitem.on{border-color:var(--accent);background:#eef2f8}
+  .spotitem small{color:var(--dim);display:block}
+  .spotitem .tag{float:right;font-size:11.5px}
+  .tag.ok{color:var(--ok)} .tag.no{color:var(--faint)}
+  .intel{font-size:13px;padding:9px 11px;border-left:2px solid var(--accent);background:#f7f8fa;
+         border-radius:0 7px 7px 0;margin-bottom:8px;line-height:1.65}
+  .hint{font-size:12.5px;color:var(--dim);line-height:1.7}
+  dialog{border:none;border-radius:12px;padding:0;max-width:620px;width:92%;background:var(--panel);
+         box-shadow:0 18px 50px rgba(0,0,0,.18)}
+  dialog::backdrop{background:rgba(30,28,25,.45)}
+  .dlg{padding:20px 24px}
+  .dlg h3{margin:0 0 4px;font-size:15px}
+  .dlg .topic{color:var(--dim);font-size:12.5px;margin-bottom:14px}
+  .line{margin:11px 0;opacity:0;transform:translateY(4px);transition:.35s}
+  .line.show{opacity:1;transform:none}
+  .line b{display:block;font-size:12px;color:var(--dim);font-weight:600;margin-bottom:2px}
+  .line p{margin:0;padding:9px 13px;background:#f7f6f3;border-radius:8px}
+  .foot{display:flex;gap:8px;justify-content:flex-end;margin-top:16px}
+  @media(max-width:900px){.wrap{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<header>
+  <h1>Eavesdrop</h1>
+  <span class="sub">Ironhold Village &mdash; stand in the right place, don't get noticed, then listen</span>
+  <span class="spacer"></span>
+  <span class="sub" id="stat">&mdash;</span>
+  <button class="ghost" onclick="prefetch()">Pre-generate lines</button>
+</header>
+
+<div class="wrap">
+  <div class="card">
+    <h2>Village map &mdash; WASD / arrow keys to move, click a spot to select</h2>
+    <svg id="map" viewBox="0 0 640 420" preserveAspectRatio="xMidYMid meet"></svg>
+    <p class="hint" style="margin-top:10px">
+      Circles are eavesdrop spots. Dashed circles are how far each NPC can notice you &mdash;
+      running doubles that range, crouching halves it, and cover shrinks it further.
+      Walk into a spot, slow down, then press Listen.
+    </p>
+  </div>
+
+  <div>
+    <div class="card" style="margin-bottom:14px">
+      <h2>Your state</h2>
+      <div class="row" id="postures"></div>
+      <div class="row">
+        <span class="seg" id="conceal" onclick="toggleConceal()">In cover</span>
+      </div>
+      <div class="kv"><span>position</span><b id="pos">&mdash;</b></div>
+      <div class="kv"><span>posture</span><b id="posname">&mdash;</b></div>
+    </div>
+
+    <div class="card" style="margin-bottom:14px">
+      <h2>Spots</h2>
+      <div id="spots" class="hint">loading&hellip;</div>
+    </div>
+
+    <div class="card" style="margin-bottom:14px">
+      <h2>Selected</h2>
+      <div id="sel" class="hint">click a spot on the map</div>
+      <div class="reason no" id="reason" style="display:none"></div>
+      <button id="listen" style="width:100%" disabled onclick="listen()">Listen</button>
+    </div>
+
+    <div class="card">
+      <h2>What you know</h2>
+      <div id="intel" class="hint">Nothing yet.</div>
+    </div>
+  </div>
+</div>
+
+<dialog id="dlg">
+  <div class="dlg">
+    <h3 id="dlgTitle">&mdash;</h3>
+    <div class="topic" id="dlgTopic"></div>
+    <div id="dlgLines"></div>
+    <div id="dlgIntel" style="margin-top:14px"></div>
+    <div class="foot">
+      <button class="ghost" onclick="document.getElementById('dlg').close()">Close</button>
+    </div>
+  </div>
+</dialog>
+
+<script>
+const PLAYER = "player";
+const MAP_W = 640, MAP_H = 420, PAD = 30;
+const WORLD_W = 60, WORLD_H = 42;
+
+let state = { spots: [], npcs: [], posture: "stand", concealed: false, pos: [25, 25] };
+let selected = null;
+let presenceTimer = null;
+
+function toMap(p) {
+  return [
+    PAD + (p[0] / WORLD_W) * (MAP_W - PAD * 2),
+    PAD + (p[1] / WORLD_H) * (MAP_H - PAD * 2),
+  ];
+}
+
+async function api(path, body) {
+  const opt = body
+    ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }
+    : {};
+  const r = await fetch(path, opt);
+  return r.json();
+}
+
+function esc(s) { return (s || "").replace(/[<>&]/g, c => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[c])); }
+
+async function loadMap() {
+  const d = await api("/api/eavesdrop/map?player_id=" + PLAYER);
+  state.spots = d.spots || [];
+  state.npcs = d.npc_positions || [];
+  renderPostures(d.postures || ["stand", "walk", "run", "crouch"]);
+  render();
+}
+
+function renderPostures(list) {
+  document.getElementById("postures").innerHTML = list.map(p =>
+    `<span class="seg ${p === state.posture ? "on" : ""}" onclick="setPosture('${p}')">${p}</span>`
+  ).join("");
+  document.getElementById("conceal").className = "seg" + (state.concealed ? " on" : "");
+}
+
+function setPosture(p) {
+  state.posture = p;
+  renderPostures(["stand", "walk", "run", "crouch"]);
+  pushPresence();
+  render();
+}
+
+function toggleConceal() {
+  state.concealed = !state.concealed;
+  renderPostures(["stand", "walk", "run", "crouch"]);
+  pushPresence();
+  render();
+}
+
+function pushPresence() {
+  clearTimeout(presenceTimer);
+  presenceTimer = setTimeout(async () => {
+    await api("/api/eavesdrop/presence", {
+      player_id: PLAYER,
+      position: state.pos,
+      posture: state.posture,
+      concealed: state.concealed,
+      location: "Ironhold Village",
+    });
+    await refresh();
+  }, 60);
+}
+
+async function refresh() {
+  const d = await api("/api/eavesdrop/map?player_id=" + PLAYER);
+  state.spots = d.spots || [];
+  render();
+  const st = await api("/api/eavesdrop/status/" + PLAYER);
+  document.getElementById("stat").textContent =
+    `heard ${st.intel_count} / ${st.spots_total}`;
+  renderIntel(st.intel || []);
+}
+
+function render() {
+  const svg = document.getElementById("map");
+  const parts = [];
+  parts.push(`<rect x="0" y="0" width="${MAP_W}" height="${MAP_H}" fill="#fbfaf7"/>`);
+
+  // spot radius (hearable zone)
+  for (const s of state.spots) {
+    const [x, y] = toMap(s.position);
+    const r = (s.radius / WORLD_W) * (MAP_W - PAD * 2);
+    const ok = s.availability && s.availability.can_eavesdrop;
+    const inr = s.availability && s.availability.in_range;
+    const stroke = ok ? "#3f7a52" : (inr ? "#b0713a" : "#c9c4ba");
+    const fill = ok ? "rgba(63,122,82,.10)" : "rgba(0,0,0,.02)";
+    parts.push(`<circle cx="${x}" cy="${y}" r="${r}" fill="${fill}" stroke="${stroke}" stroke-width="${s.spot_id === selected ? 2 : 1}" stroke-dasharray="${inr ? "0" : "4 3"}"/>`);
+  }
+
+  // where each pair actually stands for its spot
+  for (const s of state.spots) {
+    if (!s.npc_anchor) continue;
+    const [ax, ay] = toMap(s.npc_anchor);
+    const nr = (s.alert_radius / WORLD_W) * (MAP_W - PAD * 2);
+    parts.push(`<circle cx="${ax}" cy="${ay}" r="${nr}" fill="none" stroke="#d8a883" stroke-width="1.2" stroke-dasharray="3 3"/>`);
+    parts.push(`<rect x="${ax - 4}" y="${ay - 4}" width="8" height="8" rx="2" fill="#b0713a"/>`);
+  }
+
+  // npc home positions
+  for (const n of state.npcs) {
+    const [x, y] = toMap(n.position);
+    parts.push(`<circle cx="${x}" cy="${y}" r="4" fill="#b9b2a7"/>`);
+    parts.push(`<text x="${x}" y="${y - 11}" text-anchor="middle" font-size="11" fill="#77726a">${esc(n.name)}</text>`);
+  }
+
+  // spots labels
+  for (const s of state.spots) {
+    const [x, y] = toMap(s.position);
+    parts.push(`<text x="${x}" y="${y + 4}" text-anchor="middle" font-size="10.5" fill="#5f5a52">${esc(s.name)}</text>`);
+  }
+
+  // player
+  const [px, py] = toMap(state.pos);
+  parts.push(`<circle cx="${px}" cy="${py}" r="6" fill="#3b5c88"/>`);
+  parts.push(`<circle cx="${px}" cy="${py}" r="10" fill="none" stroke="#3b5c88" stroke-width="1.5" opacity=".45"/>`);
+
+  svg.innerHTML = parts.join("");
+
+  document.getElementById("pos").textContent = `(${state.pos[0].toFixed(1)}, ${state.pos[1].toFixed(1)})`;
+  document.getElementById("posname").textContent = state.posture + (state.concealed ? " · in cover" : "");
+
+  document.getElementById("spots").innerHTML = state.spots.map(s => {
+    const av = s.availability || {};
+    return `<div class="spotitem ${s.spot_id === selected ? "on" : ""}" onclick="selectSpot('${s.spot_id}')">
+      <span class="tag ${av.can_eavesdrop ? "ok" : "no"}">${av.can_eavesdrop ? "ready" : (av.blocking || "")}</span>
+      ${esc(s.name)}<small>${esc((s.npc_pair || []).join(" & "))}</small></div>`;
+  }).join("") || "<span class='hint'>no spots</span>";
+
+  renderSelected();
+}
+
+function renderSelected() {
+  const box = document.getElementById("sel");
+  const reason = document.getElementById("reason");
+  const btn = document.getElementById("listen");
+  const s = state.spots.find(x => x.spot_id === selected);
+
+  if (!s) {
+    box.innerHTML = "click a spot on the map";
+    reason.style.display = "none";
+    btn.disabled = true;
+    return;
+  }
+  const av = s.availability || {};
+  box.innerHTML = `<b>${esc(s.name)}</b><br><span class="hint">${esc((s.npc_pair || []).join(" & "))} · within ${s.radius} units</span>`;
+  reason.style.display = "block";
+  reason.className = "reason " + (av.can_eavesdrop ? "ok" : "no");
+  reason.textContent = av.reason || "";
+  btn.disabled = !av.can_eavesdrop;
+  btn.textContent = av.can_eavesdrop ? "Listen" : "Can't listen";
+}
+
+function selectSpot(id) {
+  selected = id;
+  render();
+}
+
+function renderIntel(list) {
+  const el = document.getElementById("intel");
+  if (!list.length) { el.innerHTML = "Nothing yet."; return; }
+  el.innerHTML = list.map(i => `<div class="intel">${esc(i.text)}</div>`).join("");
+}
+
+async function listen() {
+  if (!selected) return;
+  const btn = document.getElementById("listen");
+  btn.disabled = true; btn.textContent = "Listening…";
+  const res = await api("/api/eavesdrop/listen", { player_id: PLAYER, spot_id: selected });
+  btn.textContent = "Listen";
+
+  if (!res.ok) {
+    await refresh();
+    return;
+  }
+
+  const dlg = document.getElementById("dlg");
+  document.getElementById("dlgTitle").textContent = res.spot_name;
+  document.getElementById("dlgTopic").textContent = "Topic: " + res.topic;
+  const lines = document.getElementById("dlgLines");
+  lines.innerHTML = "";
+  document.getElementById("dlgIntel").innerHTML = "";
+  dlg.showModal();
+
+  res.transcript.forEach((l, i) => {
+    setTimeout(() => {
+      const el = document.createElement("div");
+      el.className = "line";
+      el.innerHTML = `<b>${esc(l.speaker)}</b><p>${esc(l.message)}</p>`;
+      lines.appendChild(el);
+      requestAnimationFrame(() => el.classList.add("show"));
+    }, i * 420);
+  });
+
+  setTimeout(async () => {
+    if (res.intel) {
+      document.getElementById("dlgIntel").innerHTML =
+        `<div class="intel"><b style="display:block;font-size:12px;color:#77726a">Recorded</b>${esc(res.intel.text)}</div>`;
+    }
+    await refresh();
+  }, res.transcript.length * 420 + 200);
+}
+
+async function prefetch() {
+  const btn = event.target;
+  btn.disabled = true; btn.textContent = "Generating…";
+  await api("/api/eavesdrop/prefetch?player_id=" + PLAYER, {});
+  btn.textContent = "Pre-generate lines";
+  btn.disabled = false;
+}
+
+document.addEventListener("keydown", e => {
+  const step = state.posture === "run" ? 1.6 : (state.posture === "crouch" ? 0.5 : 0.9);
+  let [x, y] = state.pos;
+  if (e.key === "ArrowUp" || e.key === "w" || e.key === "W") y -= step;
+  else if (e.key === "ArrowDown" || e.key === "s" || e.key === "S") y += step;
+  else if (e.key === "ArrowLeft" || e.key === "a" || e.key === "A") x -= step;
+  else if (e.key === "ArrowRight" || e.key === "d" || e.key === "D") x += step;
+  else return;
+  e.preventDefault();
+  state.pos = [Math.max(0, Math.min(WORLD_W, x)), Math.max(0, Math.min(WORLD_H, y))];
+  pushPresence();
+  render();
+});
+
+document.getElementById("map").addEventListener("click", ev => {
+  const svg = document.getElementById("map");
+  const pt = svg.createSVGPoint();
+  pt.x = ev.clientX; pt.y = ev.clientY;
+  const loc = pt.matrixTransform(svg.getScreenCTM().inverse());
+  let best = null, bestD = 1e9;
+  for (const s of state.spots) {
+    const [sx, sy] = toMap(s.position);
+    const d = Math.hypot(sx - loc.x, sy - loc.y);
+    if (d < bestD) { bestD = d; best = s.spot_id; }
+  }
+  if (best && bestD < 40) selectSpot(best);
+});
+
+(async function init() {
+  await api("/api/eavesdrop/presence", {
+    player_id: PLAYER, position: state.pos, posture: state.posture,
+    concealed: state.concealed, location: "Ironhold Village",
+  });
+  await loadMap();
+  await refresh();
+})();
+</script>
+</body>
+</html>

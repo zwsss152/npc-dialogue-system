@@ -2,6 +2,58 @@
 
 All notable changes to the NPC Dialogue System will be documented in this file.
 
+## [1.10.0] - 2026-09-19 — fork
+
+### Added — Eavesdrop System
+
+Deliberate listening, modelled on the Spycraft pillar in *007: First Light*. NPC-to-NPC
+conversations stop being pure ambience and become something the player positions
+themselves to overhear.
+
+- `eavesdrop.py`
+  - Spots with two radii: a hear radius and a notice radius, so there is a band that is
+    close enough to hear and far enough to be ignored
+  - Detection scaled by posture — running 2.5x, crouching 0.5x, cover a further 0.4x
+  - Every rejection returns a player-facing sentence, not just a boolean
+  - Intel ledger that renders straight into an NPC system prompt
+  - Transcript prefetch, because local models need 10-20s and the button cannot wait
+- `eavesdrop_spots.json` — four authored spots forming a three-stage mystery; the finale is
+  gated on intel from the other three
+- `static/eavesdrop.html` — playable 2D map
+- `demo_eavesdrop.py`, `test_eavesdrop.py` (29 tests), `EAVESDROP.md`
+- `api_server.py` — 9 endpoints under `/api/eavesdrop/`
+
+### Added — hooks in `npc_conversation.py`
+
+- `ConversationTrigger.EAVESDROP`
+- `topic_id` may be forced through `start_conversation` / `run_full_conversation`
+- `ambient_chance` is now configurable, and `ambient_filter` lets the eavesdrop system
+  suppress pairs the player is currently waiting on
+
+### Removed
+
+- `player_simulation.py`, `PLAIYER_CHARACTER.md`, `static/chronicle.html`
+- `/api/simulation/*`, `/api/chronicle/*`, `/ws/chronicle`, `/chronicle`
+- All related imports, globals, startup/shutdown wiring and documentation references
+
+### Fixed
+
+- **`run_full_conversation()` never ran a single turn.** The loop waited on
+  `ConversationState.ACTIVE`, but a fresh conversation starts in `STARTING` and only flips
+  inside the loop body. Every NPC-to-NPC conversation — including the proximity trigger and
+  `POST /api/conversations/{id}/run` — had been silently producing nothing.
+- A missing LLM backend raised `ConnectionError` from `NPCDialogue.__init__`, which made the
+  entire codebase impossible to import or test without a running Ollama. It now warns;
+  `NPC_STRICT_BACKEND=1` restores fail-fast.
+- The Ollama availability probe now has a 30-second cooldown. Creating N NPCs used to cost
+  N × 5s of dead timeout.
+- Offline fallback responses were subject-blind filler that repeated itself; they are now
+  topic-aware and skip lines already spoken in the conversation.
+
+### Changed
+
+- README: Ollama documented as optional; requirements no longer assume Apple Silicon.
+
 ## [1.1.0] - 2026-04-07
 
 ### Added - Relationship Tracking System

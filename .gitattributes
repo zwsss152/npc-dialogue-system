@@ -1,0 +1,26 @@
+# Normalise line endings across platforms.
+#
+# Without this, a Windows checkout rewrites every file to CRLF and the whole
+# repository shows up as modified on the next diff — which is exactly what
+# happened when this repo was first staged here.
+* text=auto eol=lf
+
+# Windows-only files keep CRLF
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.cs text eol=crlf
+*.sln text eol=crlf
+*.csproj text eol=crlf
+
+# Shell scripts must stay LF or they break in containers and on macOS/Linux
+*.sh text eol=lf
+
+# Binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary
+*.wav binary
+*.mp3 binary

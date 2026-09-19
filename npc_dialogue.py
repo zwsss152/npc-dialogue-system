@@ -31,6 +31,14 @@ class NPCDialogue:
     
     # Class-level connection pool for all instances
     _shared_connection_pool = None
+
+    #: 后端不可用只提示一次，避免一局游戏刷屏
+    _warned_no_backend = False
+
+    #: 后端探测失败后的静默窗口。一局游戏要创建几十个 NPC，
+    #: 每次启动都去撞一次连不上的端口会白白拖慢几秒。
+    _backend_retry_after = 0.0
+    _BACKEND_PROBE_COOLDOWN = 30.0
     
     def __init__(
         self,
@@ -152,23 +160,47 @@ class NPCDialogue:
         with open(path, 'r', encoding='utf-8') as f:
             return json.load(f)
     
-    def _check_connection(self):
-        """Verify LLM backend is accessible."""
+    def _check_connection(self, strict: Optional[bool] = None):
+        """Verify LLM backend is accessible.
+
+        Default behaviour is to **warn**, not to crash. The rest of the system
+        is built to degrade gracefully — `NPCConversationEngine` falls back to
+        template responses, the demos run offline, the unit tests need no model.
+        A hard raise here contradicts that design and makes the whole codebase
+        untestable unless Ollama happens to be running on the machine.
+
+        Pass `strict=True` (or set `NPC_STRICT_BACKEND=1`) to restore the old
+        fail-fast behaviour, e.g. for production deployments.
+        """
+        if strict is None:
+            strict = os.getenv("NPC_STRICT_BACKEND", "").lower() in ("1", "true", "yes")
+
         if self.backend == "ollama":
+            # 上次刚探测失败过，冷却期内不再重复撞端口
+            if time.time() < NPCDialogue._backend_retry_after:
+                return
             try:
                 response = requests.get("http://localhost:11434/api/tags", timeout=5)
                 models = [m['name'] for m in response.json().get('models', [])]
-                
+
                 if self.model not in models:
                     print(f"⚠️  Warning: Model '{self.model}' not found in Ollama.")
                     print(f"   Run: ollama pull {self.model}")
                     available = ", ".join(models[:5]) + ("..." if len(models) > 5 else "")
                     print(f"   Available: {available}")
             except requests.exceptions.ConnectionError:
-                raise ConnectionError(
+                NPCDialogue._backend_retry_after = time.time() + NPCDialogue._BACKEND_PROBE_COOLDOWN
+                message = (
                     "Ollama is not running! Start it with: ollama serve\n"
                     "Or install: curl -fsSL https://ollama.com/install.sh | sh"
                 )
+                if strict:
+                    raise ConnectionError(message)
+                if not NPCDialogue._warned_no_backend:
+                    NPCDialogue._warned_no_backend = True
+                    print(f"⚠️  {message.splitlines()[0]}")
+                    print("   Falling back to template responses "
+                          "(set NPC_STRICT_BACKEND=1 to fail fast instead).")
         elif self.backend == "groq":
             if not self._provider.check_connection():
                 print(f"⚠️  Warning: Could not verify Groq API connection.")

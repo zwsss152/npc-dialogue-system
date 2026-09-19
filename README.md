@@ -2,6 +2,20 @@
 
 A prototype AI-powered NPC dialogue system for games, running locally on M1 MacBook Air.
 
+> **This is a fork.** Upstream: [morganpage-tech/npc-dialogue-system](https://github.com/morganpage-tech/npc-dialogue-system)
+> (MIT, © 2026 Morgan Page). The original `LICENSE` is kept verbatim — see below for what changed.
+>
+> **Changes in this fork**
+> - **Added** a full eavesdrop system (`eavesdrop.py`, `EAVESDROP.md`) — designed positions, posture-based
+>   detection, fixed topics, and intel that feeds back into NPC dialogue.
+> - **Removed** the automated player simulation engine and the novel-style chronicle viewer
+>   (`player_simulation.py`, `PLAIYER_CHARACTER.md`, `static/chronicle.html`, and the
+>   `/api/simulation/*` + `/api/chronicle/*` endpoints).
+> - **Fixed** `run_full_conversation()` never running a single turn (the loop waited for a state the
+>   conversation only enters from inside the loop).
+> - **Changed** a missing LLM backend from a hard crash into a warning, so the system is testable offline.
+> - **Improved** the offline template responses to be topic-aware instead of generic filler.
+
 ## Features
 
 - Local LLM inference (no cloud costs or latency)
@@ -9,14 +23,18 @@ A prototype AI-powered NPC dialogue system for games, running locally on M1 MacB
 - Conversation memory (NPCs remember past interactions)
 - Swappable character cards (SillyTavern format)
 - Simple CLI interface for testing
-- **NEW: Relationship tracking system** - NPCs remember player reputation and respond differently based on trust levels
+- Relationship tracking system - NPCs remember player reputation and respond differently based on trust levels
+- **Eavesdrop system** - NPC-to-NPC conversations the player has to position themselves to overhear,
+  with posture-based detection and intel that unlocks later dialogue
 
 ## Requirements
 
-- macOS with M1/M2/M3 (Apple Silicon)
-- 8GB+ RAM recommended
 - Python 3.9+
-- Ollama
+- **Ollama is optional.** Without it the system warns and falls back to offline template
+  responses, so `python demo_eavesdrop.py` and the unit tests run with no model installed.
+  Set `NPC_STRICT_BACKEND=1` if you would rather it fail fast.
+- For real generation: [Ollama](https://ollama.com) and 8GB+ RAM recommended.
+  The setup below assumes Apple Silicon; it runs on Linux and Windows too.
 
 ## Quick Start
 
@@ -159,6 +177,23 @@ Character cards use a JSON format based on SillyTavern's popular format:
 - Keep laptop plugged in for max performance
 - Use smaller models for ambient NPCs, larger for quest-givers
 
+## Eavesdropping
+
+```bash
+python demo_eavesdrop.py                 # offline walkthrough of every rule
+
+python -m uvicorn api_server:app         # then open http://localhost:8000/eavesdrop
+```
+
+On the map: **WASD / arrow keys** to move, pick a posture, tick *In cover*, click a spot,
+press **Listen**. A spot tells you why you cannot listen yet — *"They noticed you — the
+conversation stopped."*, *"You were too loud."*, *"You haven't heard enough to follow this."*
+
+Local models need 10–20 seconds per conversation. Call `POST /api/eavesdrop/prefetch` at
+level load so the button is instant when the player presses it.
+
+See [EAVESDROP.md](EAVESDROP.md) for the geometry rules and how to author your own spots.
+
 ## Next Steps
 
 - Add lore/knowledge base (RAG with ChromaDB)
@@ -168,6 +203,7 @@ Character cards use a JSON format based on SillyTavern's popular format:
 
 ## Documentation
 
+- [EAVESDROP.md](EAVESDROP.md) - Eavesdrop system: positions, detection, intel, API
 - [RELATIONSHIPS.md](RELATIONSHIPS.md) - Complete relationship tracking guide
 - [QUICKSTART.md](QUICKSTART.md) - 5-minute setup guide
 - [INTEGRATION_GUIDE.md](INTEGRATION_GUIDE.md) - Game engine integration examples

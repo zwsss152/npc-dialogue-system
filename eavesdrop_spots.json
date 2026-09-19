@@ -1,0 +1,112 @@
+{
+  "_comment": "Eavesdrop spots — content file. Edit this to change what players can overhear; no code changes needed.",
+  "_design": [
+    "Each spot pins a FIXED topic. Random topics would make 9 out of 10 eavesdrops small talk.",
+    "Spots 1-3 are independent. Spot 4 only unlocks after the player has heard the other three —",
+    "that is what turns four separate conversations into one mystery the player assembles themselves.",
+    "",
+    "GEOMETRY — this is the part that decides whether the mechanic works at all.",
+    "  npc_anchor   where the pair is actually standing for THIS conversation",
+    "  position     where the player has to stand",
+    "  radius       how close the player must be to hear  (position + radius)",
+    "  alert_radius how close the pair notices them       (npc_anchor + alert_radius)",
+    "",
+    "  For there to be any tension, the near edge of the hear-zone must fall INSIDE",
+    "  the notice radius while the centre stays outside it:",
+    "      distance(npc_anchor, position) - radius  <  alert_radius",
+    "  With distance 6, radius 4, alert 3 you get a near edge at 2.0 (caught) and a",
+    "  centre at 6.0 (safe). The player has to stand in the far half of the circle.",
+    "",
+    "  npc_anchor exists because one NPC appears in several spots — Thorne is in three —",
+    "  so a single global NPC coordinate cannot describe where he is for each scene."
+  ],
+
+  "npc_positions": [
+    { "name": "Thorne", "position": [14.0, 24.0], "location": "Ironhold Village" },
+    { "name": "Elara", "position": [34.0, 26.0], "location": "Ironhold Village" },
+    { "name": "Zephyr", "position": [48.0, 16.0], "location": "Ironhold Village" }
+  ],
+
+  "spots": [
+    {
+      "spot_id": "spot_forge_alley",
+      "name": "The Forge Alley",
+      "location": "Ironhold Village",
+      "position": [25.0, 25.0],
+      "npc_anchor": [19.0, 25.0],
+      "radius": 4.0,
+      "alert_radius": 3.0,
+      "npc_pair": ["Thorne", "Elara"],
+      "max_turns": 4,
+
+      "topic_id": "topic_forge_order",
+      "topic_name": "The Order Nobody Asks About",
+      "topic_description": "Elara is pressing Thorne to finish a batch of blades he was told not to ask about. He is stalling. Neither of them names the buyer.",
+
+      "intel_id": "intel_forge_order",
+      "intel_text": "Someone in Ironhold is buying up old weapons in bulk and having them melted down and reforged. Elara is brokering it; Thorne is doing the work and clearly hates it."
+    },
+    {
+      "spot_id": "spot_market_ledger",
+      "name": "Behind the Market Ledger",
+      "location": "Ironhold Village",
+      "position": [41.0, 27.0],
+      "npc_anchor": [41.0, 21.0],
+      "radius": 4.0,
+      "alert_radius": 3.0,
+      "npc_pair": ["Elara", "Zephyr"],
+      "max_turns": 4,
+
+      "topic_id": "topic_three_crates",
+      "topic_name": "Three Crates With No Origin",
+      "topic_description": "Zephyr has found three crates on Elara's ledger that never crossed a border. He wants them explained. Elara wants him to stop reading her books.",
+
+      "intel_id": "intel_three_crates",
+      "intel_text": "Three crates entered Ironhold without passing any border station. Zephyr traced them north — to a battlefield that was cleared years ago."
+    },
+    {
+      "spot_id": "spot_tower_landing",
+      "name": "The Tower Landing",
+      "location": "Ironhold Village",
+      "position": [31.0, 14.0],
+      "npc_anchor": [31.0, 20.0],
+      "radius": 4.0,
+      "alert_radius": 3.0,
+      "npc_pair": ["Thorne", "Zephyr"],
+      "max_turns": 4,
+
+      "topic_id": "topic_iron_remembers",
+      "topic_name": "Iron Remembers",
+      "topic_description": "Zephyr is warning Thorne to stop feeding that iron into his furnace. Thorne insists it is only scrap. Zephyr tells him what scrap does when it has been worn by someone who died in it.",
+
+      "intel_id": "intel_iron_remembers",
+      "intel_text": "Metal that has been worn by the dead keeps a residue. Melt it down and pour it into a new blade and the new blade remembers a name that is not its own."
+    },
+    {
+      "spot_id": "spot_rampart_gap",
+      "name": "The Gap in the Rampart",
+      "location": "Ironhold Village",
+      "position": [53.0, 26.0],
+      "npc_anchor": [52.0, 20.0],
+      "radius": 4.5,
+      "alert_radius": 3.0,
+      "require_concealed": true,
+      "npc_pair": ["Thorne", "Zephyr"],
+      "max_turns": 5,
+      "once_only": true,
+
+      "requires_intel": [
+        "intel_forge_order",
+        "intel_three_crates",
+        "intel_iron_remembers"
+      ],
+
+      "topic_id": "topic_the_name",
+      "topic_name": "The Name He Gave It",
+      "topic_description": "The two of them finally stop lying to each other. Zephyr asks Thorne what name he put on the blade. Thorne does not answer at first. When he does, it is the name of his own apprentice, who died three winters ago.",
+
+      "intel_id": "intel_the_name",
+      "intel_text": "Thorne reforged the blades, but he kept one back and named it after his dead apprentice. That sword is already out in the city, and it answers to a name."
+    }
+  ]
+}
