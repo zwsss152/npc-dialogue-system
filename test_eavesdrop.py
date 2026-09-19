@@ -293,5 +293,35 @@ class TestSpotGeometry(EavesdropTestCase):
             )
 
 
+class TestContentWiring(EavesdropTestCase):
+    """内容文件和角色卡之间的接缝。
+
+    这里测的不是偷听逻辑，而是"这套东西能不能真的跑起来"。
+
+    对应的真实故障：api_server 启动时装好了 conversation_manager、
+    eavesdrop_manager 等一切，却从没往 NPC 池里放角色卡。结果玩家能走到
+    偷听点、check 也老实回答"位置合适，可以听了"，一按 Listen 却是 400
+    "NPC 'Thorne' not loaded"。当时单元测试全绿 —— 因为那条路径没人走过。
+    """
+
+    async def test_every_npc_named_in_the_spots_can_be_loaded(self):
+        if not _have_cards():
+            self.skipTest("character_cards/ 不存在")
+
+        manager = NPCManager(backend="ollama")  # 只加载卡，不连模型
+        for card in sorted(CARDS_DIR.glob("*.json")):
+            manager.load_character(str(card))
+
+        loaded = set(manager.list_characters())
+        needed = {n for spot in self.eavesdrop.spots.values() for n in spot.npc_pair}
+        missing = needed - loaded
+
+        self.assertEqual(
+            missing, set(),
+            f"偷听点引用了加载不出来的 NPC：{sorted(missing)}；"
+            f"character_cards/ 里只有 {sorted(loaded)}",
+        )
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

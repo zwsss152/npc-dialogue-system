@@ -1,0 +1,21 @@
+Load character cards at API startup
+
+The /eavesdrop map could not finish a listen. startup_event() wired up every
+subsystem — conversation manager, eavesdrop manager, dungeon master — but never
+put anything in the NPC pool. conversation_manager then failed with
+"NPC 'Thorne' not loaded" and POST /api/eavesdrop/listen answered 400.
+
+The failure mode was nasty because everything before it worked: the map let you
+walk to a spot, GET /check correctly answered "位置合适，可以听了。", and only the
+final press of Listen failed. The endpoint path had never been exercised end to
+end — the unit tests drive EavesdropManager directly and load cards themselves,
+so they stayed green.
+
+Loading the card glob at startup also means the API is usable the moment uvicorn
+is up, with no /api/characters/load call first.
+
+Add a regression test that closes the class of bug rather than this instance:
+every NPC named in eavesdrop_spots.json must be obtainable from character_cards/.
+TestContentWiring fails with the missing names if content and cards drift apart.
+
+Tests: test_eavesdrop.py — 30 tests, all passing.

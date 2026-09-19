@@ -185,7 +185,24 @@ async def startup_event():
         api_key=groq_api_key,
     )
     print(f"✅ NPC manager initialized (backend: {backend}, model: {model})")
-    
+
+    # Load the bundled character cards up front.
+    #
+    # Without this the NPC pool stays empty, every conversation endpoint answers
+    # "NPC 'X' not loaded", and the /eavesdrop map dies at the very last step:
+    # you can walk to a spot, be told you may listen, press Listen, and get a 400.
+    # Loading here also means the API is usable the moment uvicorn is up, with no
+    # setup call first.
+    loaded_cards = 0
+    if CHARACTER_CARDS_DIR.exists():
+        for card_file in sorted(CHARACTER_CARDS_DIR.glob("*.json")):
+            try:
+                manager.load_character(str(card_file))
+                loaded_cards += 1
+            except Exception as exc:
+                print(f"⚠️  Skipped {card_file.name}: {exc}")
+    print(f"✅ Loaded {loaded_cards} character card(s) from '{CHARACTER_CARDS_DIR}'")
+
     # Initialize quest manager
     quest_generator = QuestGenerator(relationship_tracker=relationship_tracker)
     quest_manager = QuestManager(
