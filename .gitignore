@@ -44,3 +44,7 @@ Thumbs.db
 
 # Environment variables
 .env
+
+# Scratch files used while preparing a commit message
+.commitmsg
+*.commitmsg
